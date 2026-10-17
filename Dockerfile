@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    LOAD_SAMPLES=true \
+    VECTOR_BACKEND=memory \
+    LLM_PROVIDER=auto
+
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
+COPY apps ./apps
+COPY data/samples ./data/samples
+
+RUN pip install . \
+    && useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/data/uploads \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 8000
+
+CMD ["uvicorn", "fin_doc_analyst.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

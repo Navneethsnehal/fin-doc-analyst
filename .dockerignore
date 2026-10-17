@@ -1,0 +1,14 @@
+.venv
+venv
+.git
+.github
+.pytest_cache
+.ruff_cache
+**/__pycache__
+*.egg-info
+.env
+data/uploads
+tests
+scripts
+*.md
+!README.md

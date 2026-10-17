@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fin-doc-analyst"
+version = "0.1.0"
+description = "Agentic RAG analyst for bank statements, loan agreements, and insurance policies."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Navneethsnehal" }]
+keywords = ["rag", "langgraph", "llmops", "guardrails", "financial-documents"]
+dependencies = [
+    "anthropic>=0.39",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "langgraph>=0.2.40",
+    "numpy>=1.26",
+    "openai>=1.50",
+    "pgvector>=0.3.6",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pypdf>=5.0",
+    "python-multipart>=0.0.12",
+    "rank-bm25>=0.2.2",
+    "streamlit>=1.40",
+    "structlog>=24.4",
+    "uvicorn>=0.32",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "reportlab>=4.2",
+    "ruff>=0.7",
+]
+
+[project.scripts]
+fin-doc-eval = "fin_doc_analyst.evals.runner:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "apps", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fin_doc_analyst"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/fin_doc_analyst/api/app.py" = ["B008"]
+"tests/conftest.py" = ["E402"]
+"scripts/generate_samples.py" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
