@@ -99,6 +99,22 @@
       "evidence": ["Overdraft fee $35.00", "Monthly maintenance fee $12.00"]
     },
     {
+      "id": "named_line_total",
+      "question": "Calculate the total of the overdraft fee and the ATM withdrawal.",
+      "expect_route": "compute",
+      "expect_refusal": false,
+      "required_facts": ["235.00"],
+      "evidence": ["Overdraft fee $35.00", "ATM withdrawal $200.00"]
+    },
+    {
+      "id": "partial_sum_refuses",
+      "question": "Calculate the total of the overdraft fee and the wire transfer fee.",
+      "expect_route": "compute",
+      "expect_refusal": true,
+      "required_facts": [],
+      "evidence": []
+    },
+    {
       "id": "monthly_payment",
       "question": "Compute the monthly payment from the principal, APR, and term in the loan agreement.",
       "expect_route": "compute",
