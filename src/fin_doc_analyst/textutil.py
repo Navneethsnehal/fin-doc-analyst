@@ -27,6 +27,8 @@ STOPWORDS = {
     "whose",
     "why",
     "how",
+    "when",
+    "where",
     "do",
     "does",
     "did",
@@ -102,6 +104,8 @@ QUERY_IGNORE = STOPWORDS | {
     "show",
     "find",
     "give",
+    "amount",
+    "amounts",
     "list",
     "month",
     "period",
@@ -141,7 +145,9 @@ SYNONYMS: dict[str, set[str]] = {
 }
 
 _TOKEN = re.compile(r"\d+(?:\.\d+)?|[a-z]+")
-_MONEY = re.compile(r"\$(\d{1,3}(?:,\d{3})*|\d+)(?:\.(\d{2}))?")
+# Comma groups must be tried before a bare digit run. Otherwise "$1,500"
+# stops at the comma, and "$1500" stops after three digits ($150).
+MONEY_RE = re.compile(r"\$(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{2}))?")
 
 
 def stem(token: str) -> str:
@@ -194,7 +200,7 @@ def sentences(text: str) -> list[str]:
 def extract_money(text: str) -> list[str]:
     """Return currency amounts as normalized decimal strings (no thousands separators)."""
     found: list[str] = []
-    for match in _MONEY.finditer(text):
+    for match in MONEY_RE.finditer(text):
         dollars = match.group(1).replace(",", "")
         cents = match.group(2) or "00"
         found.append(f"{int(dollars)}.{cents}")

@@ -91,7 +91,9 @@ def create_app(service: AnalystService | None = None) -> FastAPI:
     @app.post("/documents", response_model=DocumentInfo)
     async def upload_document(file: UploadFile = File(...)) -> DocumentInfo:
         name = file.filename or "upload.pdf"
-        data = await file.read()
+        limit = app.state.service.settings.max_upload_bytes
+        # Read one byte past the limit so an oversized body is rejected without buffering the rest.
+        data = await file.read(limit + 1)
         try:
             return app.state.service.ingest_pdf(name, data, persist=True)
         except PdfParseError as exc:

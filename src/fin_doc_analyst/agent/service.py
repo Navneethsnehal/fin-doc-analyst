@@ -54,7 +54,8 @@ class AnalystService:
         if not data.startswith(b"%PDF"):
             raise PdfParseError("File is not a PDF")
         if len(data) > self.settings.max_upload_bytes:
-            raise PdfParseError("PDF exceeds the 10 MB upload limit")
+            limit = self.settings.max_upload_bytes
+            raise PdfParseError(f"PDF exceeds the upload limit of {limit} bytes")
         info, chunks = ingest_pdf(filename, data)
         self.store.add(info, chunks)
         if persist:

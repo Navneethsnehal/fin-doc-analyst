@@ -7,6 +7,7 @@ import re
 from fin_doc_analyst.agent.tools import amortized_payment, sum_currency
 from fin_doc_analyst.schemas import Citation
 from fin_doc_analyst.textutil import (
+    MONEY_RE,
     expand,
     extract_money,
     overlap_score,
@@ -117,7 +118,12 @@ def plan_tools(question: str, chunks: list[dict[str, object]]) -> list[dict[str,
                     "output": output,
                 }
             ]
-    if any(phrase in text for phrase in ("calculate", "compute", "total of", "sum of")):
+    # Keep this list aligned with classify_question. "how much altogether"
+    # is a compute route; omitting it here used to refuse a sum the router asked for.
+    if any(
+        phrase in text
+        for phrase in ("calculate", "compute", "total of", "sum of", "how much altogether")
+    ):
         amounts = _amounts_for_total(question, chunks)
         if len(amounts) >= 2:
             output = sum_currency(amounts)
@@ -154,7 +160,10 @@ _GENERIC_AMOUNT_WORDS = (
 _GENERIC_AMOUNT_TOKENS = {
     token for phrase in _GENERIC_AMOUNT_WORDS for token in query_tokens(phrase)
 }
-_TOTAL_OF = re.compile(r"\b(?:total|sum)\s+of\s+(.+)$", re.I)
+_TOTAL_OF = re.compile(
+    r"\b(?:(?:total|sum)\s+of|how much altogether(?:\s+(?:are|is))?)\s+(.+)$",
+    re.I,
+)
 _TRAILING_SCOPE = re.compile(
     r"\s+\b(?:on|in|from|for)\s+the\s+"
     r"(?:bank|loan|policy|statement|agreement|document|documents)\b.*$",
@@ -162,7 +171,6 @@ _TRAILING_SCOPE = re.compile(
 )
 _ITEM_SPLIT = re.compile(r"\s*(?:,|&|\band\b)\s*", re.I)
 _LEADING_ARTICLE = re.compile(r"^(?:the|a|an)\s+", re.I)
-_MONEY_SPAN = re.compile(r"\$(\d{1,3}(?:,\d{3})*|\d+)(?:\.(\d{2}))?")
 
 
 def _amounts_for_total(question: str, chunks: list[dict[str, object]]) -> list[str]:
@@ -174,8 +182,8 @@ def _sum_lines(question: str, chunks: list[dict[str, object]]) -> list[tuple[str
 
     Named lines are matched one-for-one. If any name is missing from the
     documents, the whole sum is dropped so the tool cannot return a partial
-    or unrelated total. Questions that do not name lines keep the posted-fee
-    behavior.
+    or unrelated total. A question that does not name lines sums one category
+    (fees, deposits, withdrawals, or payments) and refuses when it names none.
     """
     phrases = _named_sum_phrases(question)
     if phrases:
@@ -263,7 +271,7 @@ def _amount_near_phrase(sentence: str, phrase: str) -> str | None:
         return None
     if len(found) == 1:
         return found[0]
-    matches = list(_MONEY_SPAN.finditer(sentence))
+    matches = list(MONEY_RE.finditer(sentence))
     if not matches:
         return found[0]
     anchors = query_tokens(phrase)
@@ -277,30 +285,57 @@ def _amount_near_phrase(sentence: str, phrase: str) -> str | None:
     return f"{int(dollars)}.{cents}"
 
 
-def _lines_for_keyword(question: str, chunks: list[dict[str, object]]) -> list[tuple[str, str]]:
+# First match wins, so "fee" is tested before "payment" ("fee" does not contain "payment").
+_SUM_KEYWORDS = ("fee", "deposit", "withdrawal", "payment")
+
+
+def _keyword_for(question: str) -> str:
     lowered = question.lower()
-    if "fee" in lowered:
-        keyword = "fee"
-    elif "deposit" in lowered:
-        keyword = "deposit"
-    elif "withdrawal" in lowered:
-        keyword = "withdrawal"
-    else:
-        keyword = ""
+    for keyword in _SUM_KEYWORDS:
+        if keyword in lowered:
+            return keyword
+    return ""
+
+
+def _section_matches(section: str, keyword: str) -> bool:
+    """True when the chunk heading is the category, e.g. Withdrawals / withdrawal."""
+    title = section.strip().lower()
+    return bool(keyword and title.startswith(keyword))
+
+
+def _lines_for_keyword(question: str, chunks: list[dict[str, object]]) -> list[tuple[str, str]]:
+    """Sum one category. An unnamed 'calculate the total' sums nothing.
+
+    Dated postings beat undated clauses. Each sentence contributes the amount
+    next to the category word, so a balance threshold on a fee clause is not
+    added. The same sentence copied into an overlapping chunk is counted once.
+    Lines under a matching section count even when they do not repeat the word
+    (deposit lines often do not say 'deposit').
+    """
+    keyword = _keyword_for(question)
+    if not keyword:
+        return []
     matched: list[str] = []
+    seen: set[str] = set()
     for chunk in chunks:
+        section = str(chunk.get("section") or "")
         for sentence in sentences(str(chunk["text"])):
-            if keyword and keyword not in sentence.lower():
+            if sentence in seen or re.search(r"\btotal\b", sentence, re.I):
                 continue
-            if re.search(r"\btotal\b", sentence, re.I):
+            if not extract_money(sentence):
                 continue
-            if extract_money(sentence):
-                matched.append(sentence)
+            in_text = keyword in sentence.lower()
+            if not in_text and not _section_matches(section, keyword):
+                continue
+            seen.add(sentence)
+            matched.append(sentence)
     dated = [sentence for sentence in matched if _DATE.search(sentence)]
     lines: list[tuple[str, str]] = []
     for sentence in dated or matched:
-        for amount in extract_money(sentence):
-            lines.append((sentence, amount))
+        amount = _amount_near_phrase(sentence, keyword)
+        if amount is None:
+            continue
+        lines.append((sentence, amount))
     return lines
 
 

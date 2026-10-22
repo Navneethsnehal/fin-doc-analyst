@@ -15,6 +15,24 @@ def test_redacts_ssn_and_account_number() -> None:
     assert contains_raw_pii(text)
 
 
+def test_redacts_undashed_ssn_and_separated_account_number() -> None:
+    ssn = redact("SSN 999999999")
+    assert "999999999" not in ssn
+    assert "[REDACTED:SSN]" in ssn
+    assert contains_raw_pii("SSN 999999999")
+    assert not contains_raw_pii(ssn)
+
+    account = redact("Account number: 4821-9377-01")
+    assert "4821-9377-01" not in account
+    assert "****7701" in account
+    assert contains_raw_pii("Account number: 4821-9377-01")
+    assert not contains_raw_pii(account)
+
+    spaced = redact("acct 4821 9377 01")
+    assert "4821 9377 01" not in spaced
+    assert "****7701" in spaced
+
+
 def test_logs_are_redacted(capsys) -> None:
     configure_logging("INFO")
     get_logger("test").info("ingest", detail="Account number: 4821937701")

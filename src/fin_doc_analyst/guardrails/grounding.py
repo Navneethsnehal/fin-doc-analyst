@@ -61,8 +61,6 @@ def grounding_score(
     for token in tokens:
         if token in supported_tokens or token in context_numbers:
             supported += 1
-        elif not token.isalpha() and token in context_numbers:
-            supported += 1
     return supported / len(tokens)
 
 
