@@ -10,15 +10,13 @@ def money(value: Decimal) -> Decimal:
 
 
 def sum_currency(amounts: list[str]) -> dict[str, object]:
-    """Sum currency amounts given as decimal strings."""
-    total = Decimal("0")
-    parsed: list[str] = []
-    for amount in amounts:
-        value = Decimal(str(amount))
-        parsed.append(f"{value:.2f}" if "." in str(amount) else str(value))
-        total += Decimal(str(amount))
-    result = money(total)
-    return {"amounts": [f"{Decimal(a):.2f}" for a in amounts], "total": f"{result:.2f}"}
+    """Sum currency amounts. Each amount is rounded half-up to cents, then added."""
+    cents = [money(Decimal(str(amount))) for amount in amounts]
+    total = money(sum(cents, Decimal("0")))
+    return {
+        "amounts": [f"{value:.2f}" for value in cents],
+        "total": f"{total:.2f}",
+    }
 
 
 def amortized_payment(principal: str, annual_rate: str, months: int) -> dict[str, object]:
