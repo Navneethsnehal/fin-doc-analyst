@@ -15,13 +15,27 @@ def parse_json_object(text: str) -> dict[str, object]:
     if raw.startswith("```"):
         raw = _FENCE.sub("", raw).strip()
     start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    if start == -1:
         raise LLMError("model response did not contain a JSON object")
     try:
-        payload = json.loads(raw[start : end + 1])
+        payload, _end = json.JSONDecoder().raw_decode(raw, start)
     except json.JSONDecodeError as exc:
         raise LLMError("model response was not valid JSON") from exc
     if not isinstance(payload, dict):
         raise LLMError("model response JSON was not an object")
     return payload
+
+
+def coerce_bool(value: object, default: bool = False) -> bool:
+    """Read a JSON boolean. The string "false" is false; bool("false") is not."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"true", "yes", "1"}:
+            return True
+        if cleaned in {"false", "no", "0", ""}:
+            return False
+    return default

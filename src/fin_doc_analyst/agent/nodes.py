@@ -23,9 +23,10 @@ from fin_doc_analyst.agent.state import (
 )
 from fin_doc_analyst.guardrails.grounding import is_grounded
 from fin_doc_analyst.guardrails.injection import detect_injection, neutralize
+from fin_doc_analyst.llm.parsing import coerce_bool
 from fin_doc_analyst.llm.prompts import ANSWER_SYSTEM, CLASSIFY_SYSTEM, GRADE_SYSTEM
 from fin_doc_analyst.logging_config import get_logger
-from fin_doc_analyst.schemas import Chunk, RiskFlag
+from fin_doc_analyst.schemas import Chunk, Citation, RiskFlag
 from fin_doc_analyst.textutil import corpus_token_set, overlap_score
 
 GRADE_MIN_SCORE = 0.75
@@ -50,7 +51,7 @@ def build_nodes(store: Store, llm: LLM) -> dict[str, Callable[[AgentState], dict
             }
         try:
             payload = llm.complete_json(CLASSIFY_SYSTEM, question)
-            chosen = str(payload.get("route", "answer"))
+            chosen = str(payload.get("route", "answer")).strip().lower()
         except Exception as exc:  # noqa: BLE001 — fail closed into the refusal path
             log.info("node.route.error", error=str(exc))
             chosen = "refuse"
@@ -250,7 +251,7 @@ def _is_relevant(llm: LLM, question: str, text: str, corpus: set[str]) -> bool:
         GRADE_SYSTEM,
         f"QUESTION:\n{question}\nEXCERPT:\n{neutralize(text)}",
     )
-    return bool(payload.get("relevant"))
+    return coerce_bool(payload.get("relevant"))
 
 
 def _llm_answer(
@@ -259,9 +260,6 @@ def _llm_answer(
     chunks: list[dict[str, object]],
     tool_results: list[dict[str, object]],
 ) -> tuple[str, list, bool]:
-    from fin_doc_analyst.agent.state import NOT_FOUND
-    from fin_doc_analyst.schemas import Citation
-
     blocks = []
     for chunk in chunks:
         blocks.append(
@@ -282,7 +280,7 @@ def _llm_answer(
         payload = llm.complete_json(ANSWER_SYSTEM, user)
     except Exception:
         return NOT_FOUND, [], True
-    refused = bool(payload.get("refused"))
+    refused = coerce_bool(payload.get("refused"))
     text = str(payload.get("answer") or "").strip()
     if refused or not text:
         return NOT_FOUND, [], True
