@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from fin_doc_analyst.schemas import Chunk, RiskFlag
+from fin_doc_analyst.textutil import sentences
 
 # Posting tables are not clauses. Terms sections are.
 SKIP_SECTIONS = {"deposits", "withdrawals", "account summary"}
@@ -62,7 +63,7 @@ def scan_risks(chunks: list[Chunk]) -> list[RiskFlag]:
     for chunk in chunks:
         if chunk.section.strip().lower() in SKIP_SECTIONS:
             continue
-        for sentence in _sentences(chunk.text):
+        for sentence in sentences(chunk.text):
             if len(sentence) < 18 or _DATED_POSTING.match(sentence):
                 continue
             for clause_type, severity, pattern, explanation in PATTERNS:
@@ -70,7 +71,7 @@ def scan_risks(chunks: list[Chunk]) -> list[RiskFlag]:
                     continue
                 key = (clause_type, sentence, chunk.page)
                 if key in seen:
-                    break
+                    continue
                 seen.add(key)
                 flags.append(
                     RiskFlag(
@@ -85,13 +86,6 @@ def scan_risks(chunks: list[Chunk]) -> list[RiskFlag]:
                         chunk_id=chunk.chunk_id,
                     )
                 )
-                break
     severity_order = {"high": 0, "medium": 1, "low": 2}
     flags.sort(key=lambda flag: (severity_order.get(flag.severity, 9), flag.doc_name, flag.page))
     return flags
-
-
-def _sentences(text: str) -> list[str]:
-    from fin_doc_analyst.textutil import sentences
-
-    return sentences(text)
