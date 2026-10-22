@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from fin_doc_analyst.agent.answer import plan_tools
 from fin_doc_analyst.agent.graph import build_graph
 from fin_doc_analyst.agent.service import AnalystService
 from fin_doc_analyst.api.app import create_app
@@ -55,6 +56,72 @@ def test_tools_compute_fees_and_payment(service: AnalystService) -> None:
     assert payment.tool_results[0].name == "amortized_payment"
     assert payment.tool_results[0].output["monthly_payment"] == "368.61"
     assert "368.61" in payment.answer
+
+
+def test_named_sum_does_not_add_unrelated_fees(service: AnalystService) -> None:
+    """A total names its lines. Other fees on the statement are not part of it."""
+    mixed = service.ask("Calculate the total of the overdraft fee and the ATM withdrawal.")
+    assert mixed.route == "compute"
+    assert not mixed.refused
+    assert mixed.tool_results[0].output["amounts"] == ["35.00", "200.00"]
+    assert mixed.tool_results[0].output["total"] == "235.00"
+    assert "235.00" in mixed.answer
+    assert "200.00" in mixed.answer
+    assert "12.00" not in mixed.answer
+
+    missing = service.ask("Calculate the total of the overdraft fee and the wire transfer fee.")
+    assert missing.route == "compute"
+    assert missing.refused
+    assert missing.tool_results == []
+
+
+def test_sum_matches_each_named_line_once() -> None:
+    chunks = [
+        {
+            "text": "\n".join(
+                [
+                    "09/22/2026 ATM withdrawal $200.00",
+                    "09/25/2026 Overdraft fee $35.00",
+                    "09/25/2026 Monthly maintenance fee $12.00",
+                    "Total fees charged this period: $47.00",
+                    "An overdraft fee of $35.00 is charged per item if the account is overdrawn.",
+                    (
+                        "A monthly maintenance fee of $12.00 is charged when the "
+                        "average daily balance is below $1,500.00."
+                    ),
+                ]
+            )
+        }
+    ]
+    posted = plan_tools(
+        "Calculate the total of the overdraft fee and the monthly maintenance fee "
+        "on the bank statement.",
+        chunks,
+    )
+    assert posted[0]["output"]["amounts"] == ["35.00", "12.00"]
+    assert posted[0]["output"]["total"] == "47.00"
+
+    clauses_only = plan_tools(
+        "Calculate the total of the overdraft fee and the monthly maintenance fee.",
+        [
+            {
+                "text": "\n".join(
+                    [
+                        "An overdraft fee of $35.00 is charged per item if the account "
+                        "is overdrawn.",
+                        "A monthly maintenance fee of $12.00 is charged when the average "
+                        "daily balance is below $1,500.00.",
+                    ]
+                )
+            }
+        ],
+    )
+    assert clauses_only[0]["output"]["amounts"] == ["35.00", "12.00"]
+    assert clauses_only[0]["output"]["total"] == "47.00"
+
+    generic = plan_tools("Calculate the total of the fees.", chunks)
+    assert generic[0]["output"]["amounts"] == ["35.00", "12.00"]
+    assert generic[0]["output"]["total"] == "47.00"
 
 
 def test_risk_scan_flags_the_clause_families(service: AnalystService) -> None:

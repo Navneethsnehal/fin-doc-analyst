@@ -6,7 +6,14 @@ import re
 
 from fin_doc_analyst.agent.tools import amortized_payment, sum_currency
 from fin_doc_analyst.schemas import Citation
-from fin_doc_analyst.textutil import extract_money, overlap_score, sentences
+from fin_doc_analyst.textutil import (
+    expand,
+    extract_money,
+    overlap_score,
+    query_tokens,
+    sentences,
+    tokenize,
+)
 
 _DATE = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
 _PRINCIPAL = re.compile(r"Principal amount:\s*\$([0-9,]+\.\d{2})", re.I)
@@ -124,7 +131,153 @@ def plan_tools(question: str, chunks: list[dict[str, object]]) -> list[dict[str,
     return []
 
 
+# A bare "total of the fees" is not a list of line names. Those questions still
+# sum every posted fee. A name with its own words ("overdraft fee", "ATM
+# withdrawal") has to match that line and only that line.
+_GENERIC_AMOUNT_WORDS = (
+    "fee",
+    "fees",
+    "deposit",
+    "deposits",
+    "withdrawal",
+    "withdrawals",
+    "charge",
+    "charges",
+    "charged",
+    "amount",
+    "amounts",
+    "payment",
+    "payments",
+    "transaction",
+    "transactions",
+)
+_GENERIC_AMOUNT_TOKENS = {
+    token for phrase in _GENERIC_AMOUNT_WORDS for token in query_tokens(phrase)
+}
+_TOTAL_OF = re.compile(r"\b(?:total|sum)\s+of\s+(.+)$", re.I)
+_TRAILING_SCOPE = re.compile(
+    r"\s+\b(?:on|in|from|for)\s+the\s+"
+    r"(?:bank|loan|policy|statement|agreement|document|documents)\b.*$",
+    re.I,
+)
+_ITEM_SPLIT = re.compile(r"\s*(?:,|&|\band\b)\s*", re.I)
+_LEADING_ARTICLE = re.compile(r"^(?:the|a|an)\s+", re.I)
+_MONEY_SPAN = re.compile(r"\$(\d{1,3}(?:,\d{3})*|\d+)(?:\.(\d{2}))?")
+
+
 def _amounts_for_total(question: str, chunks: list[dict[str, object]]) -> list[str]:
+    return [amount for _sentence, amount in _sum_lines(question, chunks)]
+
+
+def _sum_lines(question: str, chunks: list[dict[str, object]]) -> list[tuple[str, str]]:
+    """(sentence, amount) pairs that belong in the sum.
+
+    Named lines are matched one-for-one. If any name is missing from the
+    documents, the whole sum is dropped so the tool cannot return a partial
+    or unrelated total. Questions that do not name lines keep the posted-fee
+    behavior.
+    """
+    phrases = _named_sum_phrases(question)
+    if phrases:
+        return _lines_for_phrases(phrases, chunks)
+    return _lines_for_keyword(question, chunks)
+
+
+def _named_sum_phrases(question: str) -> list[str]:
+    cleaned = question.strip().rstrip(".?!")
+    match = _TOTAL_OF.search(cleaned)
+    if not match:
+        return []
+    body = _TRAILING_SCOPE.sub("", match.group(1).strip())
+    phrases: list[str] = []
+    for part in _ITEM_SPLIT.split(body):
+        phrase = _LEADING_ARTICLE.sub("", part.strip(" ."))
+        if phrase:
+            phrases.append(phrase)
+    if not phrases:
+        return []
+    for phrase in phrases:
+        tokens = query_tokens(phrase)
+        if not tokens or not any(token not in _GENERIC_AMOUNT_TOKENS for token in tokens):
+            return []
+    return phrases
+
+
+def _phrase_supported(phrase: str, sentence: str) -> bool:
+    tokens = query_tokens(phrase)
+    if not tokens:
+        return False
+    haystack = set(tokenize(sentence))
+    return all(expand([token]) & haystack for token in tokens)
+
+
+def _lines_for_phrases(
+    phrases: list[str], chunks: list[dict[str, object]]
+) -> list[tuple[str, str]]:
+    catalog: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        for sentence in sentences(str(chunk["text"])):
+            if sentence in seen or re.search(r"\btotal\b", sentence, re.I):
+                continue
+            if not extract_money(sentence):
+                continue
+            seen.add(sentence)
+            catalog.append(sentence)
+    chosen: list[tuple[str, str]] = []
+    used: set[str] = set()
+    for phrase in phrases:
+        best_sentence: str | None = None
+        best_rank: tuple[int, int, int] | None = None
+        for index, sentence in enumerate(catalog):
+            if sentence in used or not _phrase_supported(phrase, sentence):
+                continue
+            # A dated posting is the amount that hit the account. A clause that
+            # also states a balance threshold is the fallback, not a second hit.
+            rank = (
+                1 if _DATE.search(sentence) else 0,
+                -len(extract_money(sentence)),
+                -index,
+            )
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                best_sentence = sentence
+        if best_sentence is None:
+            return []
+        amount = _amount_near_phrase(best_sentence, phrase)
+        if amount is None:
+            return []
+        used.add(best_sentence)
+        chosen.append((best_sentence, amount))
+    return chosen
+
+
+def _amount_near_phrase(sentence: str, phrase: str) -> str | None:
+    """The figure that belongs to this line.
+
+    Fee clauses often mention a second number, the balance that triggers the
+    fee. The amount next to the fee name is the one that goes into the total.
+    """
+    found = extract_money(sentence)
+    if not found:
+        return None
+    if len(found) == 1:
+        return found[0]
+    matches = list(_MONEY_SPAN.finditer(sentence))
+    if not matches:
+        return found[0]
+    anchors = query_tokens(phrase)
+    anchor = anchors[-1] if anchors else ""
+    origin = sentence.lower().rfind(anchor) if anchor else 0
+    if origin < 0:
+        origin = 0
+    chosen = min(matches, key=lambda match: (abs(match.start() - origin), match.start()))
+    dollars = chosen.group(1).replace(",", "")
+    cents = chosen.group(2) or "00"
+    return f"{int(dollars)}.{cents}"
+
+
+def _lines_for_keyword(question: str, chunks: list[dict[str, object]]) -> list[tuple[str, str]]:
     lowered = question.lower()
     if "fee" in lowered:
         keyword = "fee"
@@ -144,11 +297,11 @@ def _amounts_for_total(question: str, chunks: list[dict[str, object]]) -> list[s
             if extract_money(sentence):
                 matched.append(sentence)
     dated = [sentence for sentence in matched if _DATE.search(sentence)]
-    chosen = dated or matched
-    amounts: list[str] = []
-    for sentence in chosen:
-        amounts.extend(extract_money(sentence))
-    return amounts
+    lines: list[tuple[str, str]] = []
+    for sentence in dated or matched:
+        for amount in extract_money(sentence):
+            lines.append((sentence, amount))
+    return lines
 
 
 def support_sentences(
@@ -159,12 +312,13 @@ def support_sentences(
     if not tool_calls:
         return [], []
     name = str(tool_calls[0]["name"])
+    sources = _source_sentences(question, chunks) if name == "sum_currency" else set()
     picked: list[str] = []
     owners: list[dict[str, object]] = []
     for chunk in chunks:
         for sentence in sentences(str(chunk["text"])):
             keep = False
-            if name == "sum_currency" and sentence in _source_sentences(question, chunks):
+            if name == "sum_currency" and sentence in sources:
                 keep = True
             if name == "amortized_payment" and (
                 _PRINCIPAL.search(sentence) or _APR.search(sentence) or _TERM.search(sentence)
@@ -177,19 +331,7 @@ def support_sentences(
 
 
 def _source_sentences(question: str, chunks: list[dict[str, object]]) -> set[str]:
-    lowered = question.lower()
-    keyword = "fee" if "fee" in lowered else "deposit" if "deposit" in lowered else ""
-    found: list[str] = []
-    for chunk in chunks:
-        for sentence in sentences(str(chunk["text"])):
-            if keyword and keyword not in sentence.lower():
-                continue
-            if re.search(r"\btotal\b", sentence, re.I):
-                continue
-            if extract_money(sentence):
-                found.append(sentence)
-    dated = [sentence for sentence in found if _DATE.search(sentence)]
-    return set(dated or found)
+    return {sentence for sentence, _amount in _sum_lines(question, chunks)}
 
 
 def compose_tool_answer(

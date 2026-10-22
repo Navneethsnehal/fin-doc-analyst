@@ -11,6 +11,7 @@ from fin_doc_analyst.agent.answer import (
     extractive_answer,
     format_sources,
     plan_tools,
+    support_sentences,
 )
 from fin_doc_analyst.agent.risk import scan_risks
 from fin_doc_analyst.agent.state import (
@@ -312,17 +313,17 @@ def _supporting_chunks(
     if not tool_results:
         return []
     name = str(tool_results[0]["name"])
+    if name == "sum_currency":
+        # Cite the lines that were actually added, not every fee on the page.
+        _lines, owners = support_sentences(question, chunks)
+        return _dedupe_chunks(owners)
     selected: list[dict[str, object]] = []
     seen: set[str] = set()
     for chunk in chunks:
         text = str(chunk["text"])
-        useful = False
-        if name == "amortized_payment" and any(
+        useful = name == "amortized_payment" and any(
             label in text for label in ("Principal amount:", "APR is", "Term:")
-        ):
-            useful = True
-        if name == "sum_currency" and _chunk_has_sum_source(question, text):
-            useful = True
+        )
         chunk_id = str(chunk["chunk_id"])
         if useful and chunk_id not in seen:
             seen.add(chunk_id)
@@ -330,12 +331,16 @@ def _supporting_chunks(
     return selected
 
 
-def _chunk_has_sum_source(question: str, text: str) -> bool:
-    import re
-
-    keyword = "fee" if "fee" in question.lower() else "deposit"
-    dated = re.search(r"\b\d{2}/\d{2}/\d{4}\b", text) is not None
-    return keyword in text.lower() and "$" in text and dated
+def _dedupe_chunks(chunks: list[dict[str, object]]) -> list[dict[str, object]]:
+    selected: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        chunk_id = str(chunk["chunk_id"])
+        if chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        selected.append(chunk)
+    return selected
 
 
 def _chunks_for_flags(chunks: list[Chunk], flags: list[RiskFlag]) -> list[Chunk]:
